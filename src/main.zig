@@ -96,6 +96,10 @@ fn truncate(r: *Managed, bits: u16) !void {
 }
 
 // String Tools
+
+// Makes an arbitrary number out of a string.
+// Takes the string, converts it to a lower hex slice without 0x, then uses Managed to set it from
+// a "string".
 fn numbify(string: []const u8, alloc: Allocator) !Managed {
     var ret = try Managed.initSet(alloc, 1);
     const hexed = try std.fmt.allocPrint(
@@ -118,6 +122,53 @@ fn denumbify(input: []const u8, alloc: Allocator) ![]u8 {
     var val = try alloc.alloc(u8, input.len * 2);
     var decoded = try std.fmt.hexToBytes(val, tt);
     return decoded;
+}
+
+fn modinv(a0: Managed, m0: Managed) !Managed {
+    var one = try Managed.initSet(a0.allocator, 1);
+    if (m0.toConst().order(one.toConst()) == std.math.Order.eq) {
+        return one;
+    }
+    defer one.deinit();
+    var a = try a0.clone();
+    defer a.deinit();
+    var m = try m0.clone();
+    defer m.deinit();
+    var x0 = try Managed.initSet(a0.allocator, 0);
+    defer x0.deinit();
+    var inv = try Managed.initSet(a0.allocator, 1);
+    while (a.toConst().order(one.toConst()) == std.math.Order.gt) {
+        var temp = try Managed.initSet(a0.allocator, 0);
+        defer temp.deinit();
+        var rem = try Managed.initSet(a0.allocator, 0);
+        defer rem.deinit();
+        try Managed.divFloor(&temp, &rem, &a, &m);
+        //std.log.warn("{}", .{rem});
+        try Managed.mul(&temp, &temp, &x0);
+        try Managed.sub(&inv, &inv, &temp);
+        std.mem.swap(Managed, &rem, &a);
+        std.mem.swap(Managed, &a, &m);
+        std.mem.swap(Managed, &x0, &inv);
+    }
+
+    var zero = try Managed.initSet(a0.allocator, 0);
+    defer zero.deinit();
+    if (inv.toConst().order(zero.toConst()) == std.math.Order.lt) {
+        try inv.add(&inv, &m0);
+    }
+    return inv;
+}
+
+test "Mod Inverse test" {
+    var a = try Managed.initSet(test_allocator, 38);
+    defer a.deinit();
+    var b = try Managed.initSet(test_allocator, 97);
+    defer b.deinit();
+    var res = try modinv(a, b);
+    var expected = try Managed.initSet(test_allocator, 23);
+    defer res.deinit();
+    defer expected.deinit();
+    try testing.expectEqual(res.toConst().order(expected.toConst()), std.math.Order.eq);
 }
 
 test "Numbify test" {
