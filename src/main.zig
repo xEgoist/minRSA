@@ -159,6 +159,44 @@ fn modinv(a0: Managed, m0: Managed) !Managed {
     return inv;
 }
 
+// Low to high power mod function.
+// Similar to the modinv, this will take three managed much like pow(b,e,m) in python.
+// This function should produce the equivlent of c = b^e mod m
+// The allocator for this function internal use is taken from the b value's allocator.
+pub fn powMod(b: Managed, e: Managed, m: Managed) !Managed {
+    var accum = try Managed.initSet(b.allocator, 1);
+    var one = try Managed.initSet(b.allocator, 0x1);
+    defer one.deinit();
+    var temp = try Managed.initSet(b.allocator, 0);
+    defer temp.deinit();
+    var x = e;
+    var apow = b;
+    while (!x.eqZero()) {
+        if (x.isOdd()) {
+            try Managed.mul(&accum, &accum, &apow);
+            try Managed.divFloor(&temp, &accum, &accum, &m);
+        }
+        try x.shiftRight(&x, 1);
+        try Managed.mul(&apow, &apow, &apow);
+        try Managed.divFloor(&temp, &apow, &apow, &m);
+    }
+    return accum;
+}
+
+test "Pow Mod" {
+    var b = try Managed.initSet(test_allocator, 1555123);
+    defer b.deinit();
+    var e = try Managed.initSet(test_allocator, 1441);
+    defer e.deinit();
+    var m = try Managed.initSet(test_allocator, 15);
+    defer m.deinit();
+    var ret = try powMod(b, e, m);
+    defer ret.deinit();
+    var expected = try Managed.initSet(test_allocator, 13);
+    defer expected.deinit();
+    try testing.expectEqual(ret.toConst().order(expected.toConst()), std.math.Order.eq);
+}
+
 test "Mod Inverse test" {
     var a = try Managed.initSet(test_allocator, 38);
     defer a.deinit();
@@ -192,7 +230,7 @@ test "Verifying random bit toggle" {
     var toggle_me = try Managed.initSet(test_allocator, 15);
     defer toggle_me.deinit();
     try toggleRandomBits(&toggle_me, 100);
-    std.log.warn("{}", .{toggle_me});
+    std.debug.print("\nRandom Number: {}\n", .{toggle_me});
 }
 
 test "initialization of RSA struct" {
