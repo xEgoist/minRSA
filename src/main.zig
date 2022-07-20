@@ -61,10 +61,7 @@ fn toggleRandomBit(r: *Managed) !void {
         seed = 42;
     }
     var rand = std.rand.DefaultPrng.init(@intCast(u64, seed));
-    var num = rand.random().int(u16);
-    if (num > RSA_SIZE) {
-        num %= RSA_SIZE;
-    }
+    var num = rand.random().uintAtMost(u16, RSA_SIZE);
     std.log.warn("{}", .{num});
     try toggle(r, num);
 }
@@ -78,11 +75,8 @@ fn toggleRandomBits(r: *Managed, iterations: u16) !void {
     var rand = std.rand.DefaultPrng.init(@intCast(u64, seed));
     var i: u16 = 0;
     while (i <= iterations) : (i += 1) {
-        var num = rand.random().int(u16);
-        if (num > RSA_SIZE) {
-            num %= RSA_SIZE;
-        }
-        //std.log.warn("{}\n",.{num});
+        var num = rand.random().uintAtMost(u16, RSA_SIZE);
+        //std.log.warn("{}\n", .{num});
         try toggle(r, num);
     }
 }
@@ -98,10 +92,7 @@ fn toggleRandomBitsRanged(r: *Managed, iterations: u16, start: Managed, end: Man
     var rand = std.rand.DefaultPrng.init(@intCast(u64, seed));
     var i: u16 = 0;
     while (i <= iterations) : (i += 1) {
-        var num = rand.random().int(u16);
-        if (num > RSA_SIZE) {
-            num %= RSA_SIZE;
-        }
+        var num = rand.random().uintAtMost(u16, RSA_SIZE);
         //std.log.warn("{}\n",.{num});
         try toggle(r, num);
     }
@@ -197,21 +188,26 @@ pub fn powMod(b: Managed, e: Managed, m: Managed) !Managed {
     defer one.deinit();
     var temp = try Managed.initSet(b.allocator, 0);
     defer temp.deinit();
-    var x = e;
-    var apow = b;
+    var x = try e.clone();
+    defer x.deinit();
+    var apow = try b.clone();
+    defer apow.deinit();
     while (!x.eqZero()) {
         if (x.isOdd()) {
             try Managed.mul(&accum, &accum, &apow);
             try Managed.divFloor(&temp, &accum, &accum, &m);
         }
         try x.shiftRight(&x, 1);
-        try Managed.mul(&apow, &apow, &apow);
-        try Managed.divFloor(&temp, &apow, &apow, &m);
+        var temp1 = try Managed.initSet(b.allocator, 0);
+        defer temp1.deinit();
+        try Managed.mul(&temp1, &apow, &apow);
+        try Managed.divFloor(&temp, &apow, &temp1, &m);
     }
     return accum;
 }
 
-fn millerRabin(num: Managed, iters: *u16) !bool {
+fn millerRabin(num: Managed, iterations: u16) !bool {
+    var iters = iterations;
     if (num.eqZero()) {
         return false;
     }
@@ -243,7 +239,7 @@ fn millerRabin(num: Managed, iters: *u16) !bool {
         r += 1;
         try s.shiftRight(&s, 1);
     }
-    outer: while (iters.* > 0) : (iters.* -= 1) {
+    outer: while (iters > 0) : (iters -= 1) {
         var a = try Managed.initSet(num.allocator, 0);
         defer a.deinit();
         try toggleRandomBitsRanged(&a, 100, lower, higher);
@@ -273,12 +269,33 @@ fn millerRabin(num: Managed, iters: *u16) !bool {
     return true;
 }
 
+fn generate_prime(alloc: Allocator) !Managed {
+    var candy = try Managed.initSet(alloc, 1);
+    try toggleRandomBits(&candy, 100);
+    var exit = try millerRabin(candy, 40);
+    while (exit != true) {
+        std.log.warn("\nCandy {}\n", .{candy});
+        candy.deinit();
+        candy = try Managed.initSet(alloc, 0);
+        // toggle 1 more random bit and see it that makes it a prime
+        try toggleRandomBits(&candy, 100);
+        exit = try millerRabin(candy, 40);
+        //std.debug.print("\nCandy {}\n", .{candy});
+    }
+    return candy;
+}
+
+test "Test Prime Generation" {
+    var prime = try generate_prime(test_allocator);
+    defer prime.deinit();
+    std.debug.print("\nRandom Prime {}\n", .{prime});
+}
+
 test "Miller Rabin Test Test" {
     var prime = try Managed.initSet(test_allocator, 0);
     try prime.setString(10, "190924658555315858151119591629547667189398663156457464802722656138791473781208916582860638604319810040699438425180594060124689945423307189481337028373");
     defer prime.deinit();
-    var iters: u16 = 40;
-    var result = try millerRabin(prime, &iters);
+    var result = try millerRabin(prime, 40);
     try testing.expectEqual(result, true);
 }
 
@@ -286,8 +303,7 @@ test "Miller Rabin Test Test 1" {
     var prime = try Managed.initSet(test_allocator, 0);
     try prime.setString(10, "23");
     defer prime.deinit();
-    var iters: u16 = 40;
-    var result = try millerRabin(prime, &iters);
+    var result = try millerRabin(prime, 40);
     try testing.expectEqual(result, true);
 }
 
@@ -295,8 +311,7 @@ test "Miller Rabin Test Test 2" {
     var prime = try Managed.initSet(test_allocator, 0);
     try prime.setString(10, "420");
     defer prime.deinit();
-    var iters: u16 = 40;
-    var result = try millerRabin(prime, &iters);
+    var result = try millerRabin(prime, 40);
     try testing.expectEqual(result, false);
 }
 
