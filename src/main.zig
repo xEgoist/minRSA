@@ -3,9 +3,10 @@ const testing = std.testing;
 const Managed = std.math.big.int.Managed;
 const Allocator = std.mem.Allocator;
 const test_allocator = std.testing.allocator;
+const ArrayList = std.ArrayList;
 
 // 2048 -> ~4096
-const RSA_SIZE = 2048;
+const RSA_SIZE = 1024;
 
 const Inner = struct {
     p: Managed,
@@ -49,13 +50,13 @@ pub const RSA = struct {
 
 fn toggle(r: *Managed, bit: u16) !void {
     var one = try Managed.initSet(r.allocator, 1);
-    defer one.deinit();
     try one.shiftLeft(&one, bit);
-    try r.bitXor(r, &one);
+    try Managed.bitXor(r, r, &one);
+    one.deinit();
 }
 
 fn toggleRandomBit(r: *Managed) !void {
-    var seed = std.time.milliTimestamp();
+    var seed = std.time.nanoTimestamp();
     if (seed < 0) {
         std.log.warn("Bad seed, using constant seed", .{});
         seed = 42;
@@ -67,7 +68,7 @@ fn toggleRandomBit(r: *Managed) !void {
 }
 
 fn toggleRandomBits(r: *Managed, iterations: u16) !void {
-    var seed = std.time.milliTimestamp();
+    var seed = std.time.nanoTimestamp();
     if (seed < 0) {
         std.log.warn("Bad seed, using constant seed", .{});
         seed = 42;
@@ -84,7 +85,7 @@ fn toggleRandomBits(r: *Managed, iterations: u16) !void {
 // Generates random number by toggling random bits of the provided r.
 // this function acts similarly to toggleRandomBits. However, it will assert that the number outputted is > start and < end.
 fn toggleRandomBitsRanged(r: *Managed, iterations: u16, start: Managed, end: Managed) !void {
-    var seed = std.time.milliTimestamp();
+    var seed = std.time.nanoTimestamp();
     if (seed < 0) {
         std.log.warn("Bad seed, using constant seed", .{});
         seed = 42;
@@ -269,27 +270,130 @@ fn millerRabin(num: Managed, iterations: u16) !bool {
     return true;
 }
 
+fn millerRabinBool(ret: *bool, num: Managed, iterations: u16) !void {
+    var iters = iterations;
+    if (num.eqZero()) {
+        ret.* = false;
+    }
+    // used to compare the num, and see if it's <= 5.
+    var six = try Managed.initSet(num.allocator, 6);
+    defer six.deinit();
+    if (num.toConst().order(six.toConst()) == std.math.Order.lt) {
+        ret.* = true;
+    }
+    if (num.isEven()) {
+        ret.* = false;
+    }
+
+    //:outer random num constants
+    var lower = try Managed.initSet(num.allocator, 1);
+    defer lower.deinit();
+    var higher = try num.clone();
+    defer higher.deinit();
+    try Managed.sub(&higher, &higher, &lower);
+    // rand constants end
+    //
+    var two = try Managed.initSet(num.allocator, 2);
+    defer two.deinit();
+    var r: u64 = 0;
+    var s = try Managed.initSet(num.allocator, 1);
+    defer s.deinit();
+    try Managed.sub(&s, &num, &s);
+    while (s.isEven()) {
+        r += 1;
+        try s.shiftRight(&s, 1);
+    }
+    outer: while (iters > 0) : (iters -= 1) {
+        var a = try Managed.initSet(num.allocator, 0);
+        defer a.deinit();
+        try toggleRandomBitsRanged(&a, 100, lower, higher);
+        var x = try powMod(a, s, num);
+        defer x.deinit();
+
+        if (x.toConst().order(lower.toConst()) == std.math.Order.eq or
+            x.toConst().order(higher.toConst()) == std.math.Order.eq)
+        {
+            continue :outer;
+        }
+        var z: u64 = 1;
+        inner: while (z < r) : (z += 1) {
+            var temp00 = x;
+            defer temp00.deinit();
+            x = try powMod(temp00, two, num);
+            if (x.toConst().order(lower.toConst()) == std.math.Order.eq) {
+                ret.* = false;
+            } else if (x.toConst().order(higher.toConst()) == std.math.Order.eq) {
+                break :inner;
+            }
+        }
+        if (z == r) {
+            ret.* = false;
+        }
+    }
+    ret.* = true;
+}
+
 fn generate_prime(alloc: Allocator) !Managed {
     var candy = try Managed.initSet(alloc, 1);
-    try toggleRandomBits(&candy, 100);
+    try toggleRandomBits(&candy, 420);
     var exit = try millerRabin(candy, 40);
     while (exit != true) {
-        std.log.warn("\nCandy {}\n", .{candy});
+        std.debug.print("\nCandy {}\n", .{candy});
         candy.deinit();
         candy = try Managed.initSet(alloc, 0);
         // toggle 1 more random bit and see it that makes it a prime
-        try toggleRandomBits(&candy, 100);
+        try toggleRandomBits(&candy, 420);
         exit = try millerRabin(candy, 40);
         //std.debug.print("\nCandy {}\n", .{candy});
     }
     return candy;
 }
 
-test "Test Prime Generation" {
-    var prime = try generate_prime(test_allocator);
-    defer prime.deinit();
-    std.debug.print("\nRandom Prime {}\n", .{prime});
+// Similar to generate_prime. However, this function is threaded for optimization.
+// takes in the allocator which will be used to allocate the prime candidate and the thread pool.
+fn generatePrimeThreaded(alloc: Allocator) !Managed {
+    var ret: Managed = undefined;
+    var exit = true;
+    while (exit) {
+        var tasks = ArrayList(std.Thread).init(alloc);
+        var ithread: usize = 0;
+        var candies = ArrayList(Managed).init(alloc);
+        while (ithread < 8) : (ithread += 1) {
+            try candies.append(try Managed.initSet(alloc, 0));
+            const thread = try std.Thread.spawn(.{}, toggleRandomBits, .{ &candies.items[ithread], 420 });
+            try tasks.append(thread);
+        }
+        for (tasks.items) |task| {
+            task.join();
+        }
+        for (candies.items) |*val| {
+            defer val.deinit();
+            std.debug.print("CANDY: {}\n", .{val.*});
+            if (try millerRabin(val.*, 40)) {
+                ret = try val.clone();
+                exit = false;
+            }
+        }
+        tasks.deinit();
+        candies.deinit();
+    }
+    return ret;
 }
+
+test "Test Threaded Generation" {
+    var prime = try generatePrimeThreaded(test_allocator);
+    std.debug.print("GOT PRIME: {}\n", .{prime});
+    defer prime.deinit();
+}
+
+//test "Test Prime Generation" {
+//    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+//    defer arena.deinit();
+//    const allocator = arena.allocator();
+//    var prime = try generate_prime(allocator);
+//    defer prime.deinit();
+//    std.debug.print("\nRandom Prime {}\n", .{prime});
+//}
 
 test "Miller Rabin Test Test" {
     var prime = try Managed.initSet(test_allocator, 0);
