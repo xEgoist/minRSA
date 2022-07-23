@@ -367,11 +367,12 @@ fn generatePrimeThreaded(alloc: Allocator) !Managed {
             task.join();
         }
         for (candies.items) |*val| {
-            defer val.deinit();
             std.debug.print("CANDY: {}\n", .{val.*});
-            if (try millerRabin(val.*, 40)) {
-                ret = try val.clone();
+            if ((try millerRabin(val.*, 40)) and exit) {
+                ret = val.*;
                 exit = false;
+            } else {
+                val.deinit();
             }
         }
         tasks.deinit();
