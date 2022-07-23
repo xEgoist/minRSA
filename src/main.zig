@@ -5,8 +5,8 @@ const Allocator = std.mem.Allocator;
 const test_allocator = std.testing.allocator;
 const ArrayList = std.ArrayList;
 
-// 2048 -> ~4096
-const RSA_SIZE = 1024;
+// 256 bytes -> 2048 -> ~4096
+const RSA_SIZE = 128;
 
 const Inner = struct {
     p: Managed,
@@ -28,10 +28,10 @@ pub const RSA = struct {
             .q = try generatePrimeThreaded(alloc),
             .pq = try Managed.initSet(alloc, 1),
             .d = undefined,
-            .phi = try Managed.initSet(alloc,1),
+            .phi = try Managed.initSet(alloc, 1),
             .e = try Managed.initSet(alloc, 65537),
         };
-        try Managed.mul(&inner.pq, &inner.q,&inner.pq);
+        try Managed.mul(&inner.pq, &inner.q, &inner.pq);
         var p1 = try Managed.initSet(alloc, 1);
         defer p1.deinit();
         var q1 = try Managed.initSet(alloc, 1);
@@ -127,6 +127,15 @@ fn truncate(r: *Managed, bits: u16) !void {
     defer one_again.deinit();
     try one.sub(&one, &one_again);
     try r.bitAnd(r, &one);
+}
+
+fn generateDevRandom(alloc: Allocator) !Managed {
+    var file = try std.fs.cwd().openFile("/dev/urandom", .{});
+    defer file.close();
+    var buf_reader = std.io.bufferedReader(file.reader());
+    var in_stream = buf_reader.reader();
+    var ret = try in_stream.readBytesNoEof(RSA_SIZE);
+    return try numbify(&ret, alloc);
 }
 
 // String Tools
@@ -354,15 +363,13 @@ fn millerRabinThreadHelped(ret: *bool, num: Managed, iterations: u16) !void {
 }
 
 fn generate_prime(alloc: Allocator) !Managed {
-    var candy = try Managed.initSet(alloc, 1);
-    try toggleRandomBits(&candy, 420);
+    var candy = try generateDevRandom(alloc);
     var exit = try millerRabin(candy, 40);
     while (exit != true) {
         std.debug.print("\nCandy {}\n", .{candy});
         candy.deinit();
-        candy = try Managed.initSet(alloc, 0);
+        candy = try generateDevRandom(alloc);
         // toggle 1 more random bit and see it that makes it a prime
-        try toggleRandomBits(&candy, 420);
         exit = try millerRabin(candy, 40);
         //std.debug.print("\nCandy {}\n", .{candy});
     }
@@ -371,7 +378,7 @@ fn generate_prime(alloc: Allocator) !Managed {
 
 // Similar to generate_prime. However, this function is threaded for optimization.
 // takes in the allocator which will be used to allocate the prime candidate and the thread pool.
-const CandyCount: usize = 40;
+const CandyCount: usize = 8000;
 fn generatePrimeThreaded(alloc: Allocator) !Managed {
     var ret: Managed = undefined;
     var exit = true;
@@ -383,13 +390,12 @@ fn generatePrimeThreaded(alloc: Allocator) !Managed {
         var iterations: usize = 0;
         //initialize the array with random values
         while (iterations < CandyCount) : (iterations += 1) {
-            try candies.append(try Managed.initSet(alloc, 0));
-            try toggleRandomBits(&candies.items[iterations], 420);
+            try candies.append(try generateDevRandom(alloc));
         }
-        outer: while (iterations > 0) : (iterations -= 8) {
+        outer: while (iterations > 0) : (iterations -= 10) {
             var threads = ArrayList(std.Thread).init(alloc);
             defer threads.deinit();
-            var threads_count: usize = 8;
+            var threads_count: usize = 10;
             while (threads_count > 0) : (threads_count -= 1) {
                 const thread = try std.Thread.spawn(.{}, millerRabinThreadHelped, .{ &bools[iterations - threads_count], candies.items[iterations - threads_count], 40 });
                 try threads.append(thread);
@@ -397,9 +403,9 @@ fn generatePrimeThreaded(alloc: Allocator) !Managed {
             for (threads.items) |th| {
                 th.join();
             }
-            for (bools[iterations - 8 .. iterations]) |val, idx| {
+            for (bools[iterations - 10 .. iterations]) |val, idx| {
                 if (val) {
-                    ret = try candies.items[iterations - 8 + idx].clone();
+                    ret = try candies.items[iterations - 10 + idx].clone();
                     exit = false;
                     break :outer;
                 }
@@ -518,7 +524,6 @@ test "Bit Shit" {
     try testing.expectEqual(toggle_me.toConst().order(expected.toConst()), std.math.Order.eq);
 }
 
-
 test "Encrypt then Decrypt with RSA" {
     var rsa = try RSA.init(test_allocator);
     defer rsa.deinit();
@@ -527,8 +532,8 @@ test "Encrypt then Decrypt with RSA" {
     // encypt
     var result = try powMod(hello, rsa.inner.e, rsa.inner.pq);
     defer result.deinit();
-    std.debug.print("ENCRYPTED: {}\n",.{result});
-    // decrypt 
+    std.debug.print("ENCRYPTED: {}\n", .{result});
+    // decrypt
     var decrypted = try powMod(result, rsa.inner.d, rsa.inner.pq);
     defer decrypted.deinit();
     var decrypted_to_text = try decrypted.toConst().toStringAlloc(test_allocator, 10, std.fmt.Case.lower);
@@ -536,5 +541,10 @@ test "Encrypt then Decrypt with RSA" {
     var decrypted_text = try denumbify(decrypted_to_text, test_allocator);
     defer test_allocator.free(decrypted_text);
     try testing.expect(std.mem.eql(u8, "HELLO WORLD", decrypted_text));
+}
 
+test "Generate Random Number With dev/random" {
+    var rand = try generateDevRandom(test_allocator);
+    defer rand.deinit();
+    std.debug.print("!!!{}!!!!\n", .{rand});
 }
