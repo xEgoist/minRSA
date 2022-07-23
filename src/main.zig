@@ -14,22 +14,32 @@ const Inner = struct {
     pq: Managed,
     d: Managed,
     phi: Managed,
+    e: Managed,
 };
 
 pub const RSA = struct {
-    e: u32 = 65537,
     allocator: Allocator,
     inner: *Inner,
 
     fn init(alloc: Allocator) !RSA {
         var inner = try alloc.create(Inner);
         inner.* = Inner{
-            .p = try Managed.initSet(alloc, 1),
-            .q = try Managed.initSet(alloc, 1),
+            .p = try generatePrimeThreaded(alloc),
+            .q = try generatePrimeThreaded(alloc),
             .pq = try Managed.initSet(alloc, 1),
-            .d = try Managed.initSet(alloc, 1),
-            .phi = try Managed.initSet(alloc, 1),
+            .d = undefined,
+            .phi = try Managed.initSet(alloc,1),
+            .e = try Managed.initSet(alloc, 65537),
         };
+        try Managed.mul(&inner.pq, &inner.q,&inner.pq);
+        var p1 = try Managed.initSet(alloc, 1);
+        defer p1.deinit();
+        var q1 = try Managed.initSet(alloc, 1);
+        defer q1.deinit();
+        try Managed.sub(&p1, &inner.p, &p1);
+        try Managed.sub(&q1, &inner.q, &q1);
+        try Managed.mul(&inner.phi, &p1, &q1);
+        inner.d = try modinv(inner.e, inner.phi);
 
         return RSA{
             .inner = inner,
@@ -41,6 +51,7 @@ pub const RSA = struct {
         self.inner.phi.deinit();
         self.inner.p.deinit();
         self.inner.q.deinit();
+        self.inner.e.deinit();
         self.inner.d.deinit();
         self.inner.pq.deinit();
         self.allocator.destroy(self.inner);
@@ -360,7 +371,7 @@ fn generate_prime(alloc: Allocator) !Managed {
 
 // Similar to generate_prime. However, this function is threaded for optimization.
 // takes in the allocator which will be used to allocate the prime candidate and the thread pool.
-const CandyCount: usize = 8;
+const CandyCount: usize = 40;
 fn generatePrimeThreaded(alloc: Allocator) !Managed {
     var ret: Managed = undefined;
     var exit = true;
@@ -495,7 +506,7 @@ test "initialization of RSA struct" {
     defer rs.deinit();
     var expected = try Managed.initSet(test_allocator, 1);
     defer expected.deinit();
-    try testing.expectEqual(expected.toConst().order(rs.inner.p.toConst()), std.math.Order.eq);
+    try testing.expect(expected.toConst().order(rs.inner.p.toConst()) != std.math.Order.eq);
 }
 
 test "Bit Shit" {
@@ -505,4 +516,25 @@ test "Bit Shit" {
     var expected = try Managed.initSet(test_allocator, 31);
     defer expected.deinit();
     try testing.expectEqual(toggle_me.toConst().order(expected.toConst()), std.math.Order.eq);
+}
+
+
+test "Encrypt then Decrypt with RSA" {
+    var rsa = try RSA.init(test_allocator);
+    defer rsa.deinit();
+    var hello = try numbify("HELLO WORLD", test_allocator);
+    defer hello.deinit();
+    // encypt
+    var result = try powMod(hello, rsa.inner.e, rsa.inner.pq);
+    defer result.deinit();
+    std.debug.print("ENCRYPTED: {}\n",.{result});
+    // decrypt 
+    var decrypted = try powMod(result, rsa.inner.d, rsa.inner.pq);
+    defer decrypted.deinit();
+    var decrypted_to_text = try decrypted.toConst().toStringAlloc(test_allocator, 10, std.fmt.Case.lower);
+    defer test_allocator.free(decrypted_to_text);
+    var decrypted_text = try denumbify(decrypted_to_text, test_allocator);
+    defer test_allocator.free(decrypted_text);
+    try testing.expect(std.mem.eql(u8, "HELLO WORLD", decrypted_text));
+
 }
