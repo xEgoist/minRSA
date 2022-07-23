@@ -6,7 +6,7 @@ const test_allocator = std.testing.allocator;
 const ArrayList = std.ArrayList;
 
 // 2048 -> ~4096
-const RSA_SIZE = 2048;
+const RSA_SIZE = 1024;
 
 const Inner = struct {
     p: Managed,
@@ -277,15 +277,18 @@ fn millerRabinThreadHelped(ret: *bool, num: Managed, iterations: u16) !void {
     var iters = iterations;
     if (num.eqZero()) {
         ret.* = false;
+        return;
     }
     // used to compare the num, and see if it's <= 5.
     var six = try Managed.initSet(num.allocator, 6);
     defer six.deinit();
     if (num.toConst().order(six.toConst()) == std.math.Order.lt) {
         ret.* = true;
+        return;
     }
     if (num.isEven()) {
         ret.* = false;
+        return;
     }
 
     //:outer random num constants
@@ -325,15 +328,18 @@ fn millerRabinThreadHelped(ret: *bool, num: Managed, iterations: u16) !void {
             x = try powMod(temp00, two, num);
             if (x.toConst().order(lower.toConst()) == std.math.Order.eq) {
                 ret.* = false;
+                return;
             } else if (x.toConst().order(higher.toConst()) == std.math.Order.eq) {
                 break :inner;
             }
         }
         if (z == r) {
             ret.* = false;
+            return;
         }
     }
     ret.* = true;
+    return;
 }
 
 fn generate_prime(alloc: Allocator) !Managed {
@@ -354,24 +360,24 @@ fn generate_prime(alloc: Allocator) !Managed {
 
 // Similar to generate_prime. However, this function is threaded for optimization.
 // takes in the allocator which will be used to allocate the prime candidate and the thread pool.
-const CandyCount: usize = 16;
+const CandyCount: usize = 8;
 fn generatePrimeThreaded(alloc: Allocator) !Managed {
     var ret: Managed = undefined;
     var exit = true;
     while (exit) {
         var candies = ArrayList(Managed).init(alloc);
         defer candies.deinit();
-        var bools = [_]bool{false} ** CandyCount;
-        var threads = ArrayList(std.Thread).init(alloc);
-        defer threads.deinit();
+        var bools = [_]bool{undefined} ** CandyCount;
+        //defer threads.deinit();
         var iterations: usize = 0;
         //initialize the array with random values
         while (iterations < CandyCount) : (iterations += 1) {
-            std.debug.print("{} ", .{iterations});
             try candies.append(try Managed.initSet(alloc, 0));
             try toggleRandomBits(&candies.items[iterations], 420);
         }
         outer: while (iterations > 0) : (iterations -= 8) {
+            var threads = ArrayList(std.Thread).init(alloc);
+            defer threads.deinit();
             var threads_count: usize = 8;
             while (threads_count > 0) : (threads_count -= 1) {
                 const thread = try std.Thread.spawn(.{}, millerRabinThreadHelped, .{ &bools[iterations - threads_count], candies.items[iterations - threads_count], 40 });
@@ -382,7 +388,7 @@ fn generatePrimeThreaded(alloc: Allocator) !Managed {
             }
             for (bools[iterations - 8 .. iterations]) |val, idx| {
                 if (val) {
-                    ret = try candies.items[idx].clone();
+                    ret = try candies.items[iterations - 8 + idx].clone();
                     exit = false;
                     break :outer;
                 }
