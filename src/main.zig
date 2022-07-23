@@ -6,7 +6,7 @@ const test_allocator = std.testing.allocator;
 const ArrayList = std.ArrayList;
 
 // 2048 -> ~4096
-const RSA_SIZE = 1024;
+const RSA_SIZE = 2048;
 
 const Inner = struct {
     p: Managed,
@@ -67,6 +67,9 @@ fn toggleRandomBit(r: *Managed) !void {
     try toggle(r, num);
 }
 
+//Will toggle n random bits on the passed variable.
+//This function is definately NOT cryptographically secure and
+//should not be used to generate real values used for RSA
 fn toggleRandomBits(r: *Managed, iterations: u16) !void {
     var seed = std.time.nanoTimestamp();
     if (seed < 0) {
@@ -270,7 +273,7 @@ fn millerRabin(num: Managed, iterations: u16) !bool {
     return true;
 }
 
-fn millerRabinBool(ret: *bool, num: Managed, iterations: u16) !void {
+fn millerRabinThreadHelped(ret: *bool, num: Managed, iterations: u16) !void {
     var iters = iterations;
     if (num.eqZero()) {
         ret.* = false;
@@ -351,32 +354,43 @@ fn generate_prime(alloc: Allocator) !Managed {
 
 // Similar to generate_prime. However, this function is threaded for optimization.
 // takes in the allocator which will be used to allocate the prime candidate and the thread pool.
+const CandyCount: usize = 16;
 fn generatePrimeThreaded(alloc: Allocator) !Managed {
     var ret: Managed = undefined;
     var exit = true;
     while (exit) {
-        var tasks = ArrayList(std.Thread).init(alloc);
-        var ithread: usize = 0;
         var candies = ArrayList(Managed).init(alloc);
-        while (ithread < 8) : (ithread += 1) {
+        defer candies.deinit();
+        var bools = [_]bool{false} ** CandyCount;
+        var threads = ArrayList(std.Thread).init(alloc);
+        defer threads.deinit();
+        var iterations: usize = 0;
+        //initialize the array with random values
+        while (iterations < CandyCount) : (iterations += 1) {
+            std.debug.print("{} ", .{iterations});
             try candies.append(try Managed.initSet(alloc, 0));
-            const thread = try std.Thread.spawn(.{}, toggleRandomBits, .{ &candies.items[ithread], 420 });
-            try tasks.append(thread);
+            try toggleRandomBits(&candies.items[iterations], 420);
         }
-        for (tasks.items) |task| {
-            task.join();
-        }
-        for (candies.items) |*val| {
-            std.debug.print("CANDY: {}\n", .{val.*});
-            if ((try millerRabin(val.*, 40)) and exit) {
-                ret = val.*;
-                exit = false;
-            } else {
-                val.deinit();
+        outer: while (iterations > 0) : (iterations -= 8) {
+            var threads_count: usize = 8;
+            while (threads_count > 0) : (threads_count -= 1) {
+                const thread = try std.Thread.spawn(.{}, millerRabinThreadHelped, .{ &bools[iterations - threads_count], candies.items[iterations - threads_count], 40 });
+                try threads.append(thread);
+            }
+            for (threads.items) |th| {
+                th.join();
+            }
+            for (bools[iterations - 8 .. iterations]) |val, idx| {
+                if (val) {
+                    ret = try candies.items[idx].clone();
+                    exit = false;
+                    break :outer;
+                }
             }
         }
-        tasks.deinit();
-        candies.deinit();
+        for (candies.items) |*candy| {
+            candy.deinit();
+        }
     }
     return ret;
 }
