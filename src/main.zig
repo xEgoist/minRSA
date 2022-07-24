@@ -142,6 +142,51 @@ fn truncate(r: *Managed, bits: u16) !void {
     try r.bitAnd(r, &one);
 }
 
+fn generateDevRandomRanged(alloc: Allocator, fd: *?std.fs.File, start: Managed, end: Managed) !Managed {
+    if (builtin.os.tag == .windows) {
+        var pbData: [RSA_SIZE]w.BYTE = undefined;
+        const ptr = @ptrCast(*w.BYTE, &pbData);
+        _ = BCryptGenRandom(null, ptr, RSA_SIZE, 0x00000002);
+        var ret = try numbify(&pbData, alloc);
+        var temp = try Managed.init(alloc);
+        defer temp.deinit();
+        try Managed.add(&temp, &start, &temp);
+        try Managed.sub(&temp, &end, &temp);
+        try Managed.divFloor(&temp, &ret, &ret, &temp);
+        try Managed.add(&ret, &ret, &start);
+        return ret;
+    } else {
+        // Open Dev random then close it once done if no file was open.
+        // helps with keeping the file open for multiple generations.
+        if (fd.* == null) {
+            var file = try std.fs.cwd().openFile("/dev/urandom", .{});
+            defer file.close();
+            var buf_reader = std.io.bufferedReader(file.reader());
+            var in_stream = buf_reader.reader();
+            var preret = try in_stream.readBytesNoEof(RSA_SIZE);
+            var ret = try numbify(&preret, alloc);
+            var temp = try Managed.init(alloc);
+            defer temp.deinit();
+            try Managed.add(&temp, &start, &temp);
+            try Managed.sub(&temp, &end, &temp);
+            try Managed.divFloor(&temp, &ret, &ret, &temp);
+            try Managed.add(&ret, &ret, &start);
+            return ret;
+        }
+        var buf_reader = std.io.bufferedReader(fd.*.?.reader());
+        var in_stream = buf_reader.reader();
+        var preret = try in_stream.readBytesNoEof(RSA_SIZE);
+        var ret = try numbify(&preret, alloc);
+        var temp = try Managed.init(alloc);
+        defer temp.deinit();
+        try Managed.add(&temp, &start, &temp);
+        try Managed.sub(&temp, &end, &temp);
+        try Managed.divFloor(&temp, &ret, &ret, &temp);
+        try Managed.add(&ret, &ret, &start);
+        return ret;
+    }
+}
+
 fn generateDevRandom(alloc: Allocator, fd: *?std.fs.File) !Managed {
     if (builtin.os.tag == .windows) {
         var pbData: [RSA_SIZE]w.BYTE = undefined;
@@ -363,10 +408,10 @@ fn millerRabinThreadHelped(ret: *bool, num: Managed, iterations: u16) !void {
         r += 1;
         try s.shiftRight(&s, 1);
     }
+    var file = std.fs.cwd().openFile("/dev/urandom", .{}) catch null;
     outer: while (iters > 0) : (iters -= 1) {
-        var a = try Managed.initSet(num.allocator, 0);
+        var a = try generateDevRandomRanged(num.allocator, &file, lower, higher);
         defer a.deinit();
-        try toggleRandomBitsRanged(&a, 100, lower, higher);
         var x = try powMod(a, s, num);
         defer x.deinit();
 
@@ -381,6 +426,9 @@ fn millerRabinThreadHelped(ret: *bool, num: Managed, iterations: u16) !void {
             defer temp00.deinit();
             x = try powMod(temp00, two, num);
             if (x.toConst().order(lower.toConst()) == std.math.Order.eq) {
+                if (file != null) {
+                    file.?.close();
+                }
                 ret.* = false;
                 return;
             } else if (x.toConst().order(higher.toConst()) == std.math.Order.eq) {
@@ -388,9 +436,15 @@ fn millerRabinThreadHelped(ret: *bool, num: Managed, iterations: u16) !void {
             }
         }
         if (z == r) {
+            if (file != null) {
+                file.?.close();
+            }
             ret.* = false;
             return;
         }
+    }
+    if (file != null) {
+        file.?.close();
     }
     ret.* = true;
     return;
@@ -412,7 +466,7 @@ fn generate_prime(alloc: Allocator) !Managed {
 
 // Similar to generate_prime. However, this function is threaded for optimization.
 // takes in the allocator which will be used to allocate the prime candidate and the thread pool.
-const ThreadCount: usize = 60;
+const ThreadCount: usize = 100;
 fn generatePrimeThreaded(alloc: Allocator) !Managed {
     var ret: Managed = undefined;
     var exit = true;
