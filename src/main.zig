@@ -141,7 +141,7 @@ fn generateDevRandom(alloc: Allocator) !Managed {
     if (builtin.os.tag == .windows) {
         var hCryptProv: w.HCRYPTPROV = undefined;
         var pbData: [RSA_SIZE]w.BYTE = [_]w.BYTE{0} ** RSA_SIZE;
-        const ptr = @ptrCast(*u8, pbData.ptr);
+        const ptr = @ptrCast(*u8, &pbData);
         CryptGenRandom(hCryptProv, RSA_SIZE, ptr);
         return try numbify(&pbData, alloc);
     } else {
