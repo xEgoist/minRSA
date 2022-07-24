@@ -19,11 +19,12 @@ const Inner = struct {
 };
 
 //Windows Only
-pub extern "Advapi32" fn CryptGenRandom(
-    hProv: w.HCRYPTPROV,
-    DwLen: w.DWORD,
-    pbbuffer: *w.BYTE,
-) callconv(w.WINAPI) w.BOOL;
+pub extern "bcrypt" fn BCryptGenRandom(
+    hAlgorithm: null,
+    pbBuffer: *w.BYTE,
+    cbBuffer: w.ULONG,
+    dwFlags: w.ULONG,
+) callconv(w.WINAPI) w.NTSTATUS;
 
 pub extern "Advapi32" fn CryptAcquireContext(
     phProv: *w.HCRYPTPROV,
@@ -148,11 +149,9 @@ fn truncate(r: *Managed, bits: u16) !void {
 
 fn generateDevRandom(alloc: Allocator) !Managed {
     if (builtin.os.tag == .windows) {
-        var hCryptProv: w.HCRYPTPROV = 0;
-        _ = CryptAcquireContext(&hCryptProv, null, null, w.PROV_RSA_FULL, 0xf0000000);
         var pbData: [RSA_SIZE]w.BYTE = undefined;
         const ptr = @ptrCast(*w.BYTE, &pbData);
-        _ = CryptGenRandom(hCryptProv, RSA_SIZE, ptr);
+        _ = BCryptGenRandom(null, ptr, RSA_SIZE, 0x00000002);
         std.debug.print("!!!!STUFF: {any}!!!!!",.{pbData});
         return try numbify(&pbData, alloc);
     } else {
