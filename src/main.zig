@@ -148,8 +148,9 @@ fn truncate(r: *Managed, bits: u16) !void {
 
 fn generateDevRandom(alloc: Allocator) !Managed {
     if (builtin.os.tag == .windows) {
-        var hCryptProv: w.HCRYPTPROV = undefined;
-        var context: w.BOOL = CryptAcquireContext(&hCryptProv, null, null, w.PROV_RSA_FULL, 0xf0000000);
+        var hCryptProv: w.HCRYPTPROV = 0;
+        const cryptptr = @ptrCast(*w.HCRYPTPROV, hCryptProv);
+        var context: w.BOOL = CryptAcquireContext(cryptptr, null, null, w.PROV_RSA_FULL, 0xf0000000);
         if (context) {
         var pbData: [RSA_SIZE]w.BYTE = [_]w.BYTE{0} ** RSA_SIZE;
         const ptr = @ptrCast(*w.BYTE, &pbData);
