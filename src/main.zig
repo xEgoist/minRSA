@@ -141,7 +141,7 @@ fn generateDevRandom(alloc: Allocator) !Managed {
     if (builtin.os.tag == .windows) {
         var hCryptProv: w.HCRYPTPROV = undefined;
         var pbData: [RSA_SIZE]w.BYTE = [_]w.BYTE{0} ** RSA_SIZE;
-        CryptGenRandom(hCryptProv, RSA_SIZE, pbData);
+        CryptGenRandom(hCryptProv, RSA_SIZE, &pbData);
     } else {
         var file = try std.fs.cwd().openFile("/dev/urandom", .{});
         defer file.close();
