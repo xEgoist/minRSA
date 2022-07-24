@@ -20,9 +20,13 @@ const Inner = struct {
 
 //Windows Only
 pub extern "bcrypt" fn BCryptGenRandom(
+    //*void / BCRYPT_ALG_HANDLE
     hAlgorithm: ?*anyopaque,
+    //PUCHAR
     pbBuffer: *w.UCHAR,
+    //ULONG
     cbBuffer: w.ULONG,
+    //ULONG
     dwFlags: w.ULONG,
 ) callconv(w.WINAPI) w.NTSTATUS;
 
@@ -33,7 +37,6 @@ pub extern "Advapi32" fn CryptAcquireContext(
     dwProvType: w.DWORD,
     dwFlags: w.DWORD,
 ) callconv(w.WINAPI) w.BOOL;
-
 
 pub const RSA = struct {
     allocator: Allocator,
@@ -152,7 +155,6 @@ fn generateDevRandom(alloc: Allocator) !Managed {
         var pbData: [RSA_SIZE]w.BYTE = undefined;
         const ptr = @ptrCast(*w.BYTE, &pbData);
         _ = BCryptGenRandom(null, ptr, RSA_SIZE, 0x00000002);
-        std.debug.print("!!!!STUFF: {any}!!!!!",.{pbData});
         return try numbify(&pbData, alloc);
     } else {
         var file = try std.fs.cwd().openFile("/dev/urandom", .{});
@@ -404,7 +406,7 @@ fn generate_prime(alloc: Allocator) !Managed {
 
 // Similar to generate_prime. However, this function is threaded for optimization.
 // takes in the allocator which will be used to allocate the prime candidate and the thread pool.
-const CandyCount: usize = 8000;
+const CandyCount: usize = 100;
 fn generatePrimeThreaded(alloc: Allocator) !Managed {
     var ret: Managed = undefined;
     var exit = true;
