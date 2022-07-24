@@ -23,7 +23,7 @@ pub extern "Advapi32" fn CryptGenRandom(
     hProv: w.HCRYPTPROV,
     DwLen: w.DWORD,
     pbbuffer: *w.BYTE,
-) callconv(w.WINAPI) ?w.HANDLE;
+) callconv(w.WINAPI) w.BOOL;
 
 pub extern "Advapi32" fn CryptAcquireContext(
     phProv: *w.HCRYPTPROV,
@@ -31,7 +31,7 @@ pub extern "Advapi32" fn CryptAcquireContext(
     szProvider: ?w.LPCSTR,
     dwProvType: w.DWORD,
     dwFlags: w.DWORD,
-) callconv(w.WINAPI) ?w.HANDLE;
+) callconv(w.WINAPI) w.BOOL;
 
 
 pub const RSA = struct {
@@ -149,8 +149,7 @@ fn truncate(r: *Managed, bits: u16) !void {
 fn generateDevRandom(alloc: Allocator) !Managed {
     if (builtin.os.tag == .windows) {
         var hCryptProv: w.HCRYPTPROV = 0;
-        const cryptptr = @intToPtr(*usize, hCryptProv);
-        var context = CryptAcquireContext(cryptptr, null, null, w.PROV_RSA_FULL, 0xf0000000);
+        var context = CryptAcquireContext(&hCryptProv, null, null, w.PROV_RSA_FULL, 0xf0000000);
         if (context) {
         var pbData: [RSA_SIZE]w.BYTE = [_]w.BYTE{0} ** RSA_SIZE;
         const ptr = @ptrCast(*w.BYTE, &pbData);
