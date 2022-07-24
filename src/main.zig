@@ -149,13 +149,12 @@ fn truncate(r: *Managed, bits: u16) !void {
 fn generateDevRandom(alloc: Allocator) !Managed {
     if (builtin.os.tag == .windows) {
         var hCryptProv: w.HCRYPTPROV = 0;
-        var context = CryptAcquireContext(&hCryptProv, null, null, w.PROV_RSA_FULL, 0xf0000000);
-        if (context != 0) {
-        var pbData: [RSA_SIZE]w.BYTE = [_]w.BYTE{0} ** RSA_SIZE;
+        _ = CryptAcquireContext(&hCryptProv, null, null, w.PROV_RSA_FULL, 0xf0000000);
+        var pbData: [RSA_SIZE]w.BYTE = undefined;
         const ptr = @ptrCast(*w.BYTE, &pbData);
         _ = CryptGenRandom(hCryptProv, RSA_SIZE, ptr);
+        std.debug.print("!!!!STUFF: {any}!!!!!",.{pbData});
         return try numbify(&pbData, alloc);
-        }
     } else {
         var file = try std.fs.cwd().openFile("/dev/urandom", .{});
         defer file.close();
