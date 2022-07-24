@@ -25,6 +25,15 @@ pub extern "Advapi32" fn CryptGenRandom(
     pbbuffer: *w.BYTE,
 ) callconv(w.WINAPI) ?w.HANDLE;
 
+pub extern "Advapi32" fn CryptAcquireContext(
+    phProv: *w.HCRYPTPROV,
+    szContainer: w.LPCSTR,
+    szProvider: *w.LPCSTR,
+    dwProvType: w.DWORD,
+    dwFlags: w.DWORD,
+) callconv(w.WINAPI) ?w.HANDLE;
+
+
 pub const RSA = struct {
     allocator: Allocator,
     inner: *Inner,
@@ -139,11 +148,14 @@ fn truncate(r: *Managed, bits: u16) !void {
 
 fn generateDevRandom(alloc: Allocator) !Managed {
     if (builtin.os.tag == .windows) {
-        var hCryptProv: w.HCRYPTPROV = 0;
+        var hCryptProv: w.HCRYPTPROV = undefined;
+        var context: w.BOOL = CryptAcquireContext(&hCryptProv, null, null, w.PROV_RSA_FULL, w.CRYPT_VERIFYCONTEXT);
+        if (context) {
         var pbData: [RSA_SIZE]w.BYTE = [_]w.BYTE{0} ** RSA_SIZE;
         const ptr = @ptrCast(*w.BYTE, &pbData);
         _ = CryptGenRandom(hCryptProv, RSA_SIZE, ptr);
         return try numbify(&pbData, alloc);
+        }
     } else {
         var file = try std.fs.cwd().openFile("/dev/urandom", .{});
         defer file.close();
