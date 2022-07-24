@@ -1,10 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const Managed = std.math.big.int.Managed;
 const Allocator = std.mem.Allocator;
 const test_allocator = std.testing.allocator;
 const ArrayList = std.ArrayList;
-
+const w = std.os.windows;
 // 256 bytes -> 2048 -> ~4096
 const RSA_SIZE = 128;
 
@@ -16,6 +17,13 @@ const Inner = struct {
     phi: Managed,
     e: Managed,
 };
+
+//Windows Only
+pub extern "Advapi32" fn CryptGenRandom(
+    hProv: w.HCRYPTPROV,
+    DwLen: w.DWORD,
+    pbbuffer: w.BYTE,
+) callconv(w.WINAPI) ?w.HANDLE;
 
 pub const RSA = struct {
     allocator: Allocator,
@@ -130,12 +138,18 @@ fn truncate(r: *Managed, bits: u16) !void {
 }
 
 fn generateDevRandom(alloc: Allocator) !Managed {
-    var file = try std.fs.cwd().openFile("/dev/urandom", .{});
-    defer file.close();
-    var buf_reader = std.io.bufferedReader(file.reader());
-    var in_stream = buf_reader.reader();
-    var ret = try in_stream.readBytesNoEof(RSA_SIZE);
-    return try numbify(&ret, alloc);
+    if (builtin.os.tag == .windows) {
+        var hCryptProv: w.HCRYPTPROV = undefined;
+        var pbData: [RSA_SIZE]w.BYTE = [_]u8{0} ** RSA_SIZE;
+        CryptGenRandom(hCryptProv, RSA_SIZE, pbData);
+    } else {
+        var file = try std.fs.cwd().openFile("/dev/urandom", .{});
+        defer file.close();
+        var buf_reader = std.io.bufferedReader(file.reader());
+        var in_stream = buf_reader.reader();
+        var ret = try in_stream.readBytesNoEof(RSA_SIZE);
+        return try numbify(&ret, alloc);
+    }
 }
 
 // String Tools
