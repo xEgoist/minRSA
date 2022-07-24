@@ -30,14 +30,6 @@ pub extern "bcrypt" fn BCryptGenRandom(
     dwFlags: w.ULONG,
 ) callconv(w.WINAPI) w.NTSTATUS;
 
-pub extern "Advapi32" fn CryptAcquireContext(
-    phProv: *w.HCRYPTPROV,
-    szContainer: ?w.LPCSTR,
-    szProvider: ?w.LPCSTR,
-    dwProvType: w.DWORD,
-    dwFlags: w.DWORD,
-) callconv(w.WINAPI) w.BOOL;
-
 pub const RSA = struct {
     allocator: Allocator,
     inner: *Inner,
@@ -150,16 +142,24 @@ fn truncate(r: *Managed, bits: u16) !void {
     try r.bitAnd(r, &one);
 }
 
-fn generateDevRandom(alloc: Allocator) !Managed {
+fn generateDevRandom(alloc: Allocator, fd: ?*std.fs.File) !Managed {
     if (builtin.os.tag == .windows) {
         var pbData: [RSA_SIZE]w.BYTE = undefined;
         const ptr = @ptrCast(*w.BYTE, &pbData);
         _ = BCryptGenRandom(null, ptr, RSA_SIZE, 0x00000002);
         return try numbify(&pbData, alloc);
     } else {
-        var file = try std.fs.cwd().openFile("/dev/urandom", .{});
-        defer file.close();
-        var buf_reader = std.io.bufferedReader(file.reader());
+        // Open Dev random then close it once done if no file was open.
+        // helps with keeping the file open for multiple generations.
+        if (fd == null) {
+            var file = try std.fs.cwd().openFile("/dev/urandom", .{});
+            defer file.close();
+            var buf_reader = std.io.bufferedReader(file.reader());
+            var in_stream = buf_reader.reader();
+            var ret = try in_stream.readBytesNoEof(RSA_SIZE);
+            return try numbify(&ret, alloc);
+        }
+        var buf_reader = std.io.bufferedReader(fd.?.reader());
         var in_stream = buf_reader.reader();
         var ret = try in_stream.readBytesNoEof(RSA_SIZE);
         return try numbify(&ret, alloc);
@@ -391,12 +391,12 @@ fn millerRabinThreadHelped(ret: *bool, num: Managed, iterations: u16) !void {
 }
 
 fn generate_prime(alloc: Allocator) !Managed {
-    var candy = try generateDevRandom(alloc);
+    var candy = try generateDevRandom(alloc, null);
     var exit = try millerRabin(candy, 40);
     while (exit != true) {
         std.debug.print("\nCandy {}\n", .{candy});
         candy.deinit();
-        candy = try generateDevRandom(alloc);
+        candy = try generateDevRandom(alloc, null);
         // toggle 1 more random bit and see it that makes it a prime
         exit = try millerRabin(candy, 40);
         //std.debug.print("\nCandy {}\n", .{candy});
@@ -406,42 +406,39 @@ fn generate_prime(alloc: Allocator) !Managed {
 
 // Similar to generate_prime. However, this function is threaded for optimization.
 // takes in the allocator which will be used to allocate the prime candidate and the thread pool.
-const ThreadCount: usize = 40;
-const CandyCount: usize = ThreadCount * 4;
+const ThreadCount: usize = 16;
 fn generatePrimeThreaded(alloc: Allocator) !Managed {
     var ret: Managed = undefined;
     var exit = true;
+    var file = std.fs.cwd().openFile("/dev/urandom", .{}) catch null;
+    defer file.?.close();
     while (exit) {
         var candies = ArrayList(Managed).init(alloc);
         defer candies.deinit();
-        var bools = [_]bool{undefined} ** CandyCount;
+        var bools = [_]bool{undefined} ** ThreadCount;
         //defer threads.deinit();
         var iterations: usize = 0;
         //initialize the array with random values
-        while (iterations < CandyCount) : (iterations += 1) {
-            try candies.append(try generateDevRandom(alloc));
+        while (iterations < ThreadCount) : (iterations += 1) {
+            try candies.append(try generateDevRandom(alloc, &file.?));
         }
-        outer: while (iterations > 0) : (iterations -= ThreadCount) {
-            var threads = ArrayList(std.Thread).init(alloc);
-            defer threads.deinit();
-            var threads_count: usize = ThreadCount;
-            while (threads_count > 0) : (threads_count -= 1) {
-                const thread = try std.Thread.spawn(.{}, millerRabinThreadHelped, .{ &bools[iterations - threads_count], candies.items[iterations - threads_count], 40 });
-                try threads.append(thread);
-            }
-            for (threads.items) |th| {
-                th.join();
-            }
-            for (bools[iterations - ThreadCount .. iterations]) |val, idx| {
-                if (val) {
-                    ret = try candies.items[iterations - ThreadCount + idx].clone();
-                    exit = false;
-                    break :outer;
-                }
-            }
+        var threads = ArrayList(std.Thread).init(alloc);
+        defer threads.deinit();
+        iterations = 0;
+        while (iterations < ThreadCount) : (iterations += 1) {
+            const thread = try std.Thread.spawn(.{}, millerRabinThreadHelped, .{ &bools[iterations], candies.items[iterations], 40 });
+            try threads.append(thread);
         }
-        for (candies.items) |*candy| {
-            candy.deinit();
+
+        for (threads.items) |th| {
+            th.join();
+        }
+        for (bools) |val, idx| {
+            if (val and exit) {
+                ret = try candies.items[idx].clone();
+                exit = false;
+            }
+            candies.items[idx].deinit();
         }
     }
     return ret;
@@ -573,7 +570,7 @@ test "Encrypt then Decrypt with RSA" {
 }
 
 test "Generate Random Number With dev/random" {
-    var rand = try generateDevRandom(test_allocator);
+    var rand = try generateDevRandom(test_allocator, null);
     defer rand.deinit();
-    std.debug.print("!!!{}!!!!\n", .{rand});
+    std.debug.print("{}\n", .{rand});
 }
