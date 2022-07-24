@@ -142,7 +142,7 @@ fn truncate(r: *Managed, bits: u16) !void {
     try r.bitAnd(r, &one);
 }
 
-fn generateDevRandom(alloc: Allocator, fd: ?*std.fs.File) !Managed {
+fn generateDevRandom(alloc: Allocator, fd: *?std.fs.File) !Managed {
     if (builtin.os.tag == .windows) {
         var pbData: [RSA_SIZE]w.BYTE = undefined;
         const ptr = @ptrCast(*w.BYTE, &pbData);
@@ -151,7 +151,7 @@ fn generateDevRandom(alloc: Allocator, fd: ?*std.fs.File) !Managed {
     } else {
         // Open Dev random then close it once done if no file was open.
         // helps with keeping the file open for multiple generations.
-        if (fd == null) {
+        if (fd.* == null) {
             var file = try std.fs.cwd().openFile("/dev/urandom", .{});
             defer file.close();
             var buf_reader = std.io.bufferedReader(file.reader());
@@ -159,7 +159,7 @@ fn generateDevRandom(alloc: Allocator, fd: ?*std.fs.File) !Managed {
             var ret = try in_stream.readBytesNoEof(RSA_SIZE);
             return try numbify(&ret, alloc);
         }
-        var buf_reader = std.io.bufferedReader(fd.?.reader());
+        var buf_reader = std.io.bufferedReader(fd.*.?.reader());
         var in_stream = buf_reader.reader();
         var ret = try in_stream.readBytesNoEof(RSA_SIZE);
         return try numbify(&ret, alloc);
@@ -411,7 +411,6 @@ fn generatePrimeThreaded(alloc: Allocator) !Managed {
     var ret: Managed = undefined;
     var exit = true;
     var file = std.fs.cwd().openFile("/dev/urandom", .{}) catch null;
-    defer file.?.close();
     while (exit) {
         var candies = ArrayList(Managed).init(alloc);
         defer candies.deinit();
@@ -420,7 +419,7 @@ fn generatePrimeThreaded(alloc: Allocator) !Managed {
         var iterations: usize = 0;
         //initialize the array with random values
         while (iterations < ThreadCount) : (iterations += 1) {
-            try candies.append(try generateDevRandom(alloc, &file.?));
+            try candies.append(try generateDevRandom(alloc, &file));
         }
         var threads = ArrayList(std.Thread).init(alloc);
         defer threads.deinit();
@@ -440,6 +439,9 @@ fn generatePrimeThreaded(alloc: Allocator) !Managed {
             }
             candies.items[idx].deinit();
         }
+    }
+    if (file != null) {
+        file.?.close();
     }
     return ret;
 }
@@ -570,7 +572,8 @@ test "Encrypt then Decrypt with RSA" {
 }
 
 test "Generate Random Number With dev/random" {
-    var rand = try generateDevRandom(test_allocator, null);
+    var file: ?std.fs.File = null;
+    var rand = try generateDevRandom(test_allocator, &file);
     defer rand.deinit();
     std.debug.print("{}\n", .{rand});
 }
