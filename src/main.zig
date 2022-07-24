@@ -406,7 +406,8 @@ fn generate_prime(alloc: Allocator) !Managed {
 
 // Similar to generate_prime. However, this function is threaded for optimization.
 // takes in the allocator which will be used to allocate the prime candidate and the thread pool.
-const CandyCount: usize = 100;
+const ThreadCount: usize = 40;
+const CandyCount: usize = ThreadCount * 4;
 fn generatePrimeThreaded(alloc: Allocator) !Managed {
     var ret: Managed = undefined;
     var exit = true;
@@ -420,10 +421,10 @@ fn generatePrimeThreaded(alloc: Allocator) !Managed {
         while (iterations < CandyCount) : (iterations += 1) {
             try candies.append(try generateDevRandom(alloc));
         }
-        outer: while (iterations > 0) : (iterations -= 10) {
+        outer: while (iterations > 0) : (iterations -= ThreadCount) {
             var threads = ArrayList(std.Thread).init(alloc);
             defer threads.deinit();
-            var threads_count: usize = 10;
+            var threads_count: usize = ThreadCount;
             while (threads_count > 0) : (threads_count -= 1) {
                 const thread = try std.Thread.spawn(.{}, millerRabinThreadHelped, .{ &bools[iterations - threads_count], candies.items[iterations - threads_count], 40 });
                 try threads.append(thread);
@@ -431,9 +432,9 @@ fn generatePrimeThreaded(alloc: Allocator) !Managed {
             for (threads.items) |th| {
                 th.join();
             }
-            for (bools[iterations - 10 .. iterations]) |val, idx| {
+            for (bools[iterations - ThreadCount .. iterations]) |val, idx| {
                 if (val) {
-                    ret = try candies.items[iterations - 10 + idx].clone();
+                    ret = try candies.items[iterations - ThreadCount + idx].clone();
                     exit = false;
                     break :outer;
                 }
