@@ -20,7 +20,7 @@ const Inner = struct {
 
 //Windows Only
 pub extern "bcrypt" fn BCryptGenRandom(
-    hAlgorithm: ?anyopaque,
+    hAlgorithm: anyopaque,
     pbBuffer: *w.BYTE,
     cbBuffer: w.ULONG,
     dwFlags: w.ULONG,
