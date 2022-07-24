@@ -22,7 +22,7 @@ const Inner = struct {
 pub extern "Advapi32" fn CryptGenRandom(
     hProv: w.HCRYPTPROV,
     DwLen: w.DWORD,
-    pbbuffer: w.BYTE,
+    pbbuffer: *w.BYTE,
 ) callconv(w.WINAPI) ?w.HANDLE;
 
 pub const RSA = struct {
