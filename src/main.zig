@@ -35,19 +35,18 @@ pub extern "bcrypt" fn BCryptGenRandom(
 
 pub const RSA = struct {
     allocator: Allocator,
-    inner: *Inner,
+    inner: Inner,
 
     pub fn init(alloc: Allocator) !RSA {
-        var inner = try alloc.create(Inner);
-        inner.* = Inner{
+        var inner = Inner{
             .p = try generatePrimeThreaded(alloc),
             .q = try generatePrimeThreaded(alloc),
-            .pq = try Managed.initSet(alloc, 1),
+            .pq = try Managed.init(alloc),
             .d = undefined,
             .phi = try Managed.initSet(alloc, 1),
             .e = try Managed.initSet(alloc, 65537),
         };
-        try Managed.mul(&inner.pq, &inner.q, &inner.pq);
+        try Managed.mul(&inner.pq, &inner.q, &inner.p);
         var p1 = try Managed.initSet(alloc, 1);
         defer p1.deinit();
         var q1 = try Managed.initSet(alloc, 1);
@@ -70,7 +69,6 @@ pub const RSA = struct {
         self.inner.e.deinit();
         self.inner.d.deinit();
         self.inner.pq.deinit();
-        self.allocator.destroy(self.inner);
         self.inner = undefined;
     }
 };
@@ -287,8 +285,6 @@ pub fn modinv(a0: Managed, m0: Managed) !Managed {
 // The allocator for this function internal use is taken from the b value's allocator.
 pub fn powMod(b: Managed, e: Managed, m: Managed) !Managed {
     var accum = try Managed.initSet(b.allocator, 1);
-    var one = try Managed.initSet(b.allocator, 0x1);
-    defer one.deinit();
     var temp = try Managed.initSet(b.allocator, 0);
     defer temp.deinit();
     var x = try e.clone();
@@ -301,10 +297,8 @@ pub fn powMod(b: Managed, e: Managed, m: Managed) !Managed {
             try Managed.divFloor(&temp, &accum, &accum, &m);
         }
         try x.shiftRight(&x, 1);
-        var temp1 = try Managed.initSet(b.allocator, 0);
-        defer temp1.deinit();
-        try Managed.mul(&temp1, &apow, &apow);
-        try Managed.divFloor(&temp, &apow, &temp1, &m);
+        try Managed.sqr(&apow, &apow);
+        try Managed.divFloor(&temp, &apow, &apow, &m);
     }
     return accum;
 }
@@ -476,7 +470,7 @@ fn generate_prime(alloc: Allocator) !Managed {
 
 // Similar to generate_prime. However, this function is threaded for optimization.
 // takes in the allocator which will be used to allocate the prime candidate and the thread pool.
-const ThreadCount: usize = 100;
+const ThreadCount: usize = 16;
 pub fn generatePrimeThreaded(alloc: Allocator) !Managed {
     var ret: Managed = undefined;
     var exit = true;
