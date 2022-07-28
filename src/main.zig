@@ -259,7 +259,13 @@ pub fn generateDevRandom(alloc: Allocator, fd: *?std.fs.File) !Managed {
         var pbData: [RSA_SIZE]w.BYTE = undefined;
         const ptr = @ptrCast(*w.BYTE, &pbData);
         _ = BCryptGenRandom(null, ptr, RSA_SIZE, 0x00000002);
-        return try numbify(&pbData, alloc);
+        var result = try numbify(&pbData, alloc);
+        if (result.isEven()) {
+            var one = try Managed.initSet(alloc, 1);
+            defer one.deinit();
+            try Managed.add(&result, &result, &one);
+        }
+        return result;
     } else {
         // Open Dev random then close it once done if no file was open.
         // helps with keeping the file open for multiple generations.
@@ -269,7 +275,13 @@ pub fn generateDevRandom(alloc: Allocator, fd: *?std.fs.File) !Managed {
             var buf_reader = std.io.bufferedReader(file.reader());
             var in_stream = buf_reader.reader();
             var ret = try in_stream.readBytesNoEof(RSA_SIZE);
-            return try numbify(&ret, alloc);
+            var result = try numbify(&ret, alloc);
+            if (result.isEven()) {
+                var one = try Managed.initSet(alloc, 1);
+                defer one.deinit();
+                try Managed.add(&result, &result, &one);
+            }
+            return result;
         }
         var buf_reader = std.io.bufferedReader(fd.*.?.reader());
         var in_stream = buf_reader.reader();
