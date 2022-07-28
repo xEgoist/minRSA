@@ -71,7 +71,7 @@ pub const RSA = struct {
         self.inner.pq.deinit();
         self.inner = undefined;
     }
-    fn crt(self: *RSA, input: Managed) !Managed {
+    fn crtDecrypt(self: *RSA, input: Managed) !Managed {
         var ret = try Managed.init(self.allocator);
         var p1 = try Managed.initSet(self.allocator, 1);
         defer p1.deinit();
@@ -89,6 +89,39 @@ pub const RSA = struct {
         defer a1.deinit();
         //a2 operations (reduction)
         try Managed.divFloor(&ret, &q1, &self.inner.d, &q1);
+        var cq = try Managed.init(self.allocator);
+        defer cq.deinit();
+        try Managed.divFloor(&ret, &cq, &input, &self.inner.q);
+        var a2 = try powMod(cq, q1, self.inner.q);
+        defer a2.deinit();
+        var qinv = try modinv(self.inner.q, self.inner.p);
+        defer qinv.deinit();
+        //msg operation
+        try Managed.sub(&a1, &a1, &a2);
+        try Managed.mul(&a1, &a1, &qinv);
+        try Managed.divFloor(&ret, &a1, &a1, &self.inner.p);
+        try Managed.mul(&a1, &a1, &self.inner.q);
+        try Managed.add(&ret, &a1, &a2);
+        return ret;
+    }
+    fn crtEncrypt(self: *RSA, input: Managed) !Managed {
+        var ret = try Managed.init(self.allocator);
+        var p1 = try Managed.initSet(self.allocator, 1);
+        defer p1.deinit();
+        var q1 = try Managed.initSet(self.allocator, 1);
+        defer q1.deinit();
+        try Managed.sub(&p1, &self.inner.p, &p1);
+        try Managed.sub(&q1, &self.inner.q, &q1);
+        std.debug.print("!!{}!!\n", .{q1});
+        //a1 operations (reduction)
+        try Managed.divFloor(&ret, &p1, &self.inner.e, &p1);
+        var cp = try Managed.init(self.allocator);
+        defer cp.deinit();
+        try Managed.divFloor(&ret, &cp, &input, &self.inner.p);
+        var a1 = try powMod(cp, p1, self.inner.p);
+        defer a1.deinit();
+        //a2 operations (reduction)
+        try Managed.divFloor(&ret, &q1, &self.inner.e, &q1);
         var cq = try Managed.init(self.allocator);
         defer cq.deinit();
         try Managed.divFloor(&ret, &cq, &input, &self.inner.q);
@@ -639,11 +672,11 @@ test "Encrypt then Decrypt with RSA" {
     var hello = try numbify("HELLO WORLD", test_allocator);
     defer hello.deinit();
     // encypt
-    var result = try powMod(hello, rsa.inner.e, rsa.inner.pq);
+    var result = try rsa.crtEncrypt(hello);
     defer result.deinit();
     std.debug.print("ENCRYPTED: {}\n", .{result});
     // decrypt
-    var decrypted = try rsa.crt(result);
+    var decrypted = try rsa.crtDecrypt(result);
     defer decrypted.deinit();
     var decrypted_to_text = try decrypted.toConst().toStringAlloc(test_allocator, 10, std.fmt.Case.lower);
     defer test_allocator.free(decrypted_to_text);
