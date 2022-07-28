@@ -71,6 +71,35 @@ pub const RSA = struct {
         self.inner.pq.deinit();
         self.inner = undefined;
     }
+    fn crt(self: *RSA, input: Managed) !Managed {
+        var ret = try Managed.init(self.allocator);
+        var p1 = try Managed.initSet(self.allocator, 1);
+        defer p1.deinit();
+        var q1 = try Managed.initSet(self.allocator, 1);
+        defer q1.deinit();
+        try Managed.sub(&p1, &self.inner.p, &p1);
+        try Managed.sub(&q1, &self.inner.q, &q1);
+
+        try Managed.divFloor(&ret, &p1, &self.inner.d, &p1);
+        var cp = try Managed.init(self.allocator);
+        defer cp.deinit();
+        try Managed.divFloor(&ret, &cp, &input, &self.inner.p);
+        p1 = try powMod(cp, p1, self.inner.p);
+
+        try Managed.divFloor(&ret, &q1, &self.inner.d, &q1);
+        var cq = try Managed.init(self.allocator);
+        defer cq.deinit();
+        try Managed.divFloor(&ret, &cq, &input, &self.inner.q);
+        q1 = try powMod(cq, q1, self.inner.q);
+        var qinv = try modinv(self.inner.q, self.inner.p);
+        defer qinv.deinit();
+        try Managed.sub(&p1, &p1, &q1);
+        try Managed.mul(&p1, &p1, &qinv);
+        try Managed.divFloor(&ret, &p1, &p1, &self.inner.p);
+        try Managed.mul(&p1, &p1, &self.inner.q);
+        try Managed.add(&ret, &p1, &q1);
+        return ret;
+    }
 };
 
 fn toggle(r: *Managed, bit: u16) !void {
@@ -95,7 +124,7 @@ fn toggleRandomBit(r: *Managed) !void {
 //Will toggle n random bits on the passed variable.
 //This function is definately NOT cryptographically secure and
 //should not be used to generate real values used for RSA
-fn toggleRandomBits(r: *Managed, iterations: u16) !void {
+pub fn toggleRandomBits(r: *Managed, iterations: u16) !void {
     var seed = std.time.nanoTimestamp();
     if (seed < 0) {
         std.log.warn("Bad seed, using constant seed", .{});
@@ -112,7 +141,7 @@ fn toggleRandomBits(r: *Managed, iterations: u16) !void {
 
 // Generates random number by toggling random bits of the provided r.
 // this function acts similarly to toggleRandomBits. However, it will assert that the number outputted is > start and < end.
-fn toggleRandomBitsRanged(r: *Managed, iterations: u16, start: Managed, end: Managed) !void {
+pub fn toggleRandomBitsRanged(r: *Managed, iterations: u16, start: Managed, end: Managed) !void {
     var seed = std.time.nanoTimestamp();
     if (seed < 0) {
         std.log.warn("Bad seed, using constant seed", .{});
@@ -143,7 +172,7 @@ fn truncate(r: *Managed, bits: u16) !void {
     try r.bitAnd(r, &one);
 }
 
-fn generateDevRandomRanged(alloc: Allocator, fd: *?std.fs.File, start: Managed, end: Managed) !Managed {
+pub fn generateDevRandomRanged(alloc: Allocator, fd: *?std.fs.File, start: Managed, end: Managed) !Managed {
     if (builtin.os.tag == .windows) {
         var pbData: [RSA_SIZE]w.BYTE = undefined;
         const ptr = @ptrCast(*w.BYTE, &pbData);
@@ -188,7 +217,7 @@ fn generateDevRandomRanged(alloc: Allocator, fd: *?std.fs.File, start: Managed, 
     }
 }
 
-fn generateDevRandom(alloc: Allocator, fd: *?std.fs.File) !Managed {
+pub fn generateDevRandom(alloc: Allocator, fd: *?std.fs.File) !Managed {
     if (builtin.os.tag == .windows) {
         var pbData: [RSA_SIZE]w.BYTE = undefined;
         const ptr = @ptrCast(*w.BYTE, &pbData);
@@ -208,7 +237,13 @@ fn generateDevRandom(alloc: Allocator, fd: *?std.fs.File) !Managed {
         var buf_reader = std.io.bufferedReader(fd.*.?.reader());
         var in_stream = buf_reader.reader();
         var ret = try in_stream.readBytesNoEof(RSA_SIZE);
-        return try numbify(&ret, alloc);
+        var result = try numbify(&ret, alloc);
+        if (result.isEven()) {
+            var one = try Managed.initSet(alloc, 1);
+            defer one.deinit();
+            try Managed.add(&result, &result, &one);
+        }
+        return result;
     }
 }
 
@@ -306,7 +341,7 @@ pub fn powMod(b: Managed, e: Managed, m: Managed) !Managed {
 // Miller Rabin primality test where iterations is the number of rounds.
 // true => number is probably prime
 // false => number is definately not a prime
-fn millerRabin(num: Managed, iterations: u16) !bool {
+pub fn millerRabin(num: Managed, iterations: u16) !bool {
     var iters = iterations;
     if (num.eqZero()) {
         return false;
@@ -376,14 +411,9 @@ const LowerPrimes = [_]u32{ 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47,
 // However, it takes in the bool as a supplied argument. This is helpful for the usage of threads.
 // ret.* = true => Probably Prime
 // ret.* = false => definately not a prime
-fn millerRabinThreadHelped(ret: *bool, num: Managed, iterations: u16) !void {
+pub fn millerRabinThreadHelped(ret: *bool, num: Managed, iterations: u16) !void {
     var iters = iterations;
     if (num.eqZero()) {
-        ret.* = false;
-        return;
-    }
-    // used to compare the num, and see if it's <= 5.
-    if (num.isEven()) {
         ret.* = false;
         return;
     }
@@ -516,15 +546,6 @@ test "Test Threaded Generation" {
     defer prime.deinit();
 }
 
-//test "Test Prime Generation" {
-//    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-//    defer arena.deinit();
-//    const allocator = arena.allocator();
-//    var prime = try generate_prime(allocator);
-//    defer prime.deinit();
-//    std.debug.print("\nRandom Prime {}\n", .{prime});
-//}
-
 test "Miller Rabin Test Test" {
     var prime = try Managed.initSet(test_allocator, 0);
     try prime.setString(10, "190924658555315858151119591629547667189398663156457464802722656138791473781208916582860638604319810040699438425180594060124689945423307189481337028373");
@@ -618,7 +639,7 @@ test "Encrypt then Decrypt with RSA" {
     defer result.deinit();
     std.debug.print("ENCRYPTED: {}\n", .{result});
     // decrypt
-    var decrypted = try powMod(result, rsa.inner.d, rsa.inner.pq);
+    var decrypted = try rsa.crt(result);
     defer decrypted.deinit();
     var decrypted_to_text = try decrypted.toConst().toStringAlloc(test_allocator, 10, std.fmt.Case.lower);
     defer test_allocator.free(decrypted_to_text);
@@ -627,9 +648,9 @@ test "Encrypt then Decrypt with RSA" {
     try testing.expect(std.mem.eql(u8, "HELLO WORLD", decrypted_text));
 }
 
-test "Generate Random Number With dev/random" {
-    var file: ?std.fs.File = null;
-    var rand = try generateDevRandom(test_allocator, &file);
-    defer rand.deinit();
-    std.debug.print("{}\n", .{rand});
-}
+//test "Generate Random Number With dev/random" {
+//    var file: ?std.fs.File = null;
+//    var rand = try generateDevRandom(test_allocator, &file);
+//    defer rand.deinit();
+//    std.debug.print("{}\n", .{rand});
+//}
