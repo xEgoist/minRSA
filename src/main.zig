@@ -46,6 +46,9 @@ pub const RSA = struct {
             .phi = try Managed.initSet(alloc, 1),
             .e = try Managed.initSet(alloc, 65537),
         };
+        if (inner.q.toConst().order(inner.p.toConst()) == std.math.Order.gt) {
+            std.mem.swap(Managed, &inner.q, &inner.p);
+        }
         try Managed.mul(&inner.pq, &inner.q, &inner.p);
         var p1 = try Managed.initSet(alloc, 1);
         defer p1.deinit();
@@ -684,17 +687,18 @@ test "Encrypt then Decrypt with RSA" {
     var hello = try numbify("HELLO WORLD", test_allocator);
     defer hello.deinit();
     // encypt
-    var result = try rsa.crtEncrypt(hello);
+    var result = try powMod(hello, rsa.inner.e, rsa.inner.pq);
     defer result.deinit();
     std.debug.print("ENCRYPTED: {}\n", .{result});
     // decrypt
-    var decrypted = try rsa.crtDecrypt(result);
+    var decrypted = try powMod(result, rsa.inner.d, rsa.inner.pq);
     defer decrypted.deinit();
     var decrypted_to_text = try decrypted.toConst().toStringAlloc(test_allocator, 10, std.fmt.Case.lower);
     defer test_allocator.free(decrypted_to_text);
     var decrypted_text = try denumbify(decrypted_to_text, test_allocator);
     defer test_allocator.free(decrypted_text);
     try testing.expect(std.mem.eql(u8, "HELLO WORLD", decrypted_text));
+    std.debug.print("Message Was: {s}\n", .{decrypted_text});
 }
 
 //test "Generate Random Number With dev/random" {
