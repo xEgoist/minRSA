@@ -79,25 +79,29 @@ pub const RSA = struct {
         defer q1.deinit();
         try Managed.sub(&p1, &self.inner.p, &p1);
         try Managed.sub(&q1, &self.inner.q, &q1);
-
+        std.debug.print("!!{}!!\n", .{q1});
+        //a1 operations (reduction)
         try Managed.divFloor(&ret, &p1, &self.inner.d, &p1);
         var cp = try Managed.init(self.allocator);
         defer cp.deinit();
         try Managed.divFloor(&ret, &cp, &input, &self.inner.p);
-        p1 = try powMod(cp, p1, self.inner.p);
-
+        var a1 = try powMod(cp, p1, self.inner.p);
+        defer a1.deinit();
+        //a2 operations (reduction)
         try Managed.divFloor(&ret, &q1, &self.inner.d, &q1);
         var cq = try Managed.init(self.allocator);
         defer cq.deinit();
         try Managed.divFloor(&ret, &cq, &input, &self.inner.q);
-        q1 = try powMod(cq, q1, self.inner.q);
+        var a2 = try powMod(cq, q1, self.inner.q);
+        defer a2.deinit();
         var qinv = try modinv(self.inner.q, self.inner.p);
         defer qinv.deinit();
-        try Managed.sub(&p1, &p1, &q1);
-        try Managed.mul(&p1, &p1, &qinv);
-        try Managed.divFloor(&ret, &p1, &p1, &self.inner.p);
-        try Managed.mul(&p1, &p1, &self.inner.q);
-        try Managed.add(&ret, &p1, &q1);
+        //msg operation
+        try Managed.sub(&a1, &a1, &a2);
+        try Managed.mul(&a1, &a1, &qinv);
+        try Managed.divFloor(&ret, &a1, &a1, &self.inner.p);
+        try Managed.mul(&a1, &a1, &self.inner.q);
+        try Managed.add(&ret, &a1, &a2);
         return ret;
     }
 };
