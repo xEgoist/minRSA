@@ -1,4 +1,5 @@
 const std = @import("std");
+const os = std.os;
 const builtin = @import("builtin");
 const testing = std.testing;
 const Managed = std.math.big.int.Managed;
@@ -19,19 +20,6 @@ const Inner = struct {
     phi: Managed,
     e: Managed,
 };
-
-//Windows Only
-// Using the bcrypt header to generate cryptographically secure random numbers.
-pub extern "bcrypt" fn BCryptGenRandom(
-    //*void / BCRYPT_ALG_HANDLE
-    hAlgorithm: ?*anyopaque,
-    //PUCHAR
-    pbBuffer: *w.UCHAR,
-    //ULONG
-    cbBuffer: w.ULONG,
-    //ULONG
-    dwFlags: w.ULONG,
-) callconv(w.WINAPI) w.NTSTATUS;
 
 pub const RSA = struct {
     allocator: Allocator,
@@ -82,7 +70,6 @@ pub const RSA = struct {
         defer q1.deinit();
         try Managed.sub(&p1, &self.inner.p, &p1);
         try Managed.sub(&q1, &self.inner.q, &q1);
-        std.debug.print("!!{}!!\n", .{q1});
         //a1 operations (reduction)
         try Managed.divFloor(&ret, &p1, &self.inner.d, &p1);
         var cp = try Managed.init(self.allocator);
@@ -115,7 +102,6 @@ pub const RSA = struct {
         defer q1.deinit();
         try Managed.sub(&p1, &self.inner.p, &p1);
         try Managed.sub(&q1, &self.inner.q, &q1);
-        std.debug.print("!!{}!!\n", .{q1});
         //a1 operations (reduction)
         try Managed.divFloor(&ret, &p1, &self.inner.e, &p1);
         var cp = try Managed.init(self.allocator);
@@ -212,91 +198,29 @@ fn truncate(r: *Managed, bits: u16) !void {
     try r.bitAnd(r, &one);
 }
 
-pub fn generateDevRandomRanged(alloc: Allocator, fd: *?std.fs.File, start: Managed, end: Managed) !Managed {
-    if (builtin.os.tag == .windows) {
-        var pbData: [RSA_SIZE]w.BYTE = undefined;
-        const ptr = @ptrCast(*w.BYTE, &pbData);
-        _ = BCryptGenRandom(null, ptr, RSA_SIZE, 0x00000002);
-        var ret = try numbify(&pbData, alloc);
-        var temp = try Managed.init(alloc);
-        defer temp.deinit();
-        try Managed.add(&temp, &start, &temp);
-        try Managed.sub(&temp, &end, &temp);
-        try Managed.divFloor(&temp, &ret, &ret, &temp);
-        try Managed.add(&ret, &ret, &start);
-        return ret;
-    } else {
-        // Open Dev random then close it once done if no file was open.
-        // helps with keeping the file open for multiple generations.
-        if (fd.* == null) {
-            var file = try std.fs.cwd().openFile("/dev/urandom", .{});
-            defer file.close();
-            var buf_reader = std.io.bufferedReader(file.reader());
-            var in_stream = buf_reader.reader();
-            var preret = try in_stream.readBytesNoEof(RSA_SIZE);
-            var ret = try numbify(&preret, alloc);
-            var temp = try Managed.init(alloc);
-            defer temp.deinit();
-            try Managed.add(&temp, &start, &temp);
-            try Managed.sub(&temp, &end, &temp);
-            try Managed.divFloor(&temp, &ret, &ret, &temp);
-            try Managed.add(&ret, &ret, &start);
-            return ret;
-        }
-        var buf_reader = std.io.bufferedReader(fd.*.?.reader());
-        var in_stream = buf_reader.reader();
-        var preret = try in_stream.readBytesNoEof(RSA_SIZE);
-        var ret = try numbify(&preret, alloc);
-        var temp = try Managed.init(alloc);
-        defer temp.deinit();
-        try Managed.add(&temp, &start, &temp);
-        try Managed.sub(&temp, &end, &temp);
-        try Managed.divFloor(&temp, &ret, &ret, &temp);
-        try Managed.add(&ret, &ret, &start);
-        return ret;
-    }
+pub fn generateDevRandomRanged(alloc: Allocator, start: Managed, end: Managed) !Managed {
+    var buffer: [RSA_SIZE]u8 = undefined;
+    try os.getrandom(&buffer);
+    var ret = try numbify(&buffer, alloc);
+    var temp = try Managed.init(alloc);
+    defer temp.deinit();
+    try Managed.add(&temp, &start, &temp);
+    try Managed.sub(&temp, &end, &temp);
+    try Managed.divFloor(&temp, &ret, &ret, &temp);
+    try Managed.add(&ret, &ret, &start);
+    return ret;
 }
 
-pub fn generateDevRandom(alloc: Allocator, fd: *?std.fs.File) !Managed {
-    if (builtin.os.tag == .windows) {
-        var pbData: [RSA_SIZE]w.BYTE = undefined;
-        const ptr = @ptrCast(*w.BYTE, &pbData);
-        _ = BCryptGenRandom(null, ptr, RSA_SIZE, 0x00000002);
-        var result = try numbify(&pbData, alloc);
-        if (result.isEven()) {
-            var one = try Managed.initSet(alloc, 1);
-            defer one.deinit();
-            try Managed.add(&result, &result, &one);
-        }
-        return result;
-    } else {
-        // Open Dev random then close it once done if no file was open.
-        // helps with keeping the file open for multiple generations.
-        if (fd.* == null) {
-            var file = try std.fs.cwd().openFile("/dev/urandom", .{});
-            defer file.close();
-            var buf_reader = std.io.bufferedReader(file.reader());
-            var in_stream = buf_reader.reader();
-            var ret = try in_stream.readBytesNoEof(RSA_SIZE);
-            var result = try numbify(&ret, alloc);
-            if (result.isEven()) {
-                var one = try Managed.initSet(alloc, 1);
-                defer one.deinit();
-                try Managed.add(&result, &result, &one);
-            }
-            return result;
-        }
-        var buf_reader = std.io.bufferedReader(fd.*.?.reader());
-        var in_stream = buf_reader.reader();
-        var ret = try in_stream.readBytesNoEof(RSA_SIZE);
-        var result = try numbify(&ret, alloc);
-        if (result.isEven()) {
-            var one = try Managed.initSet(alloc, 1);
-            defer one.deinit();
-            try Managed.add(&result, &result, &one);
-        }
-        return result;
+pub fn generateDevRandom(alloc: Allocator) !Managed {
+    var buffer: [RSA_SIZE]u8 = undefined;
+    try os.getrandom(&buffer);
+    var result = try numbify(&buffer, alloc);
+    if (result.isEven()) {
+        var one = try Managed.initSet(alloc, 1);
+        defer one.deinit();
+        try Managed.add(&result, &result, &one);
     }
+    return result;
 }
 
 // String Tools
@@ -504,7 +428,7 @@ pub fn millerRabinThreadHelped(ret: *bool, num: Managed, iterations: u16) !void 
         }
     }
     outer: while (iters > 0) : (iters -= 1) {
-        var a = try generateDevRandomRanged(num.allocator, &file, lower, higher);
+        var a = try generateDevRandomRanged(num.allocator, lower, higher);
         defer a.deinit();
         var x = try powMod(a, s, num);
         defer x.deinit();
@@ -552,11 +476,10 @@ fn generate_prime(alloc: Allocator) !Managed {
 
 // Similar to generate_prime. However, this function is threaded for optimization.
 // takes in the allocator which will be used to allocate the prime candidate and the thread pool.
-const ThreadCount: usize = 16;
+const ThreadCount: usize = 50;
 pub fn generatePrimeThreaded(alloc: Allocator) !Managed {
     var ret: Managed = undefined;
     var exit = true;
-    var file = std.fs.cwd().openFile("/dev/urandom", .{}) catch null;
     while (exit) {
         var candies = ArrayList(Managed).init(alloc);
         defer candies.deinit();
@@ -565,7 +488,7 @@ pub fn generatePrimeThreaded(alloc: Allocator) !Managed {
         var iterations: usize = 0;
         //initialize the array with random values
         while (iterations < ThreadCount) : (iterations += 1) {
-            try candies.append(try generateDevRandom(alloc, &file));
+            try candies.append(try generateDevRandom(alloc));
         }
         var threads = ArrayList(std.Thread).init(alloc);
         defer threads.deinit();
@@ -585,9 +508,6 @@ pub fn generatePrimeThreaded(alloc: Allocator) !Managed {
             }
             candies.items[idx].deinit();
         }
-    }
-    if (file != null) {
-        file.?.close();
     }
     return ret;
 }
@@ -689,7 +609,7 @@ test "Encrypt then Decrypt with RSA" {
     // encypt
     var result = try powMod(hello, rsa.inner.e, rsa.inner.pq);
     defer result.deinit();
-    std.debug.print("ENCRYPTED: {}\n", .{result});
+    //std.debug.print("ENCRYPTED: {}\n", .{result});
     // decrypt
     var decrypted = try powMod(result, rsa.inner.d, rsa.inner.pq);
     defer decrypted.deinit();
